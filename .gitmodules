@@ -1,0 +1,7 @@
+[submodule "external/cppcoro"]
+	path = external/cppcoro
+	url = https://github.com/lewissbaker/cppcoro.git
+	branch = generic_ops
+[submodule "external/networking-ts-impl"]
+	path = external/networking-ts-impl
+	url = https://github.com/chriskohlhoff/networking-ts-impl.git
