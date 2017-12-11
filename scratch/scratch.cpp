@@ -12,11 +12,54 @@
 // Project home: https://github.com/ericniebler/coronet
 //
 
+#include <experimental/io_context>
+#include <experimental/executor>
 #include <coronet/coronet.hpp>
-#include <cppcoro/task.hpp>
-#include <iostream>
+#include <cppcoro/sync_wait.hpp>
 
-int main()
-{
-    std::cout << "hello, coronet!" << std::endl;
+#include <cstdio>
+#include <optional>
+#include <functional>
+
+// Define some "universal" asynchronous APIs:
+inline constexpr coronet::async async_stuff1 =
+    [](int arg, auto token) -> coronet::async_result_t<int(int), decltype(token)> {
+        INITIAL_SUSPEND(token);
+        std::printf("async_stuff1\n");
+        co_return arg + 1;
+    };
+
+inline constexpr coronet::async async_stuff2 =
+    [](int arg, auto token) -> coronet::async_result_t<int(int), decltype(token)> {
+        INITIAL_SUSPEND(token);
+        std::printf("async_stuff2\n");
+        // allocator and executor of this coroutine are implicit.
+        int i = co_await async_stuff1(arg);
+        co_return i + i;
+    };
+
+int main() {
+    // An asynchronous work queue on which to schedule the coroutines
+    std::experimental::net::io_context ctx;
+    // Keep the work queue alive even if there are no work items.
+    auto g = std::experimental::net::make_work_guard(ctx);
+    // Drive the work queue from another thread.
+    auto t = std::thread([&ctx]{ctx.run();});
+    // Fetch an executor so we can schedule work on this thread pool.
+    auto e = ctx.get_executor();
+
+    // Use coroutines, return a coronet::task
+    auto i = cppcoro::sync_wait(async_stuff2(20, coronet::yield(e)));
+    std::printf("hello coroutine! %d\n", i);
+
+    // use callbacks, return void.
+    async_stuff2(
+        20,
+        coronet::schedule_on(e, [state = 1234](std::exception_ptr, int i) {
+            std::printf("hello callback! %d (state = %d)\n", i, state);
+        })
+    );
+
+    g.reset();
+    t.join();
 }

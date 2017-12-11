@@ -20,12 +20,15 @@ target_include_directories(coronet INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/cppcoro/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/networking-ts-impl/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/meta/include>
     $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include>
     $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include/cppcoro>
-    $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include/net>)
-target_compile_features(coronet INTERFACE cxx_std_17)
+    $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include/net>
+    $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include/meta>)
+#target_compile_features(coronet INTERFACE cxx_std_17)
 target_compile_options(coronet INTERFACE
-    $<$<CXX_COMPILER_ID:Clang>:-fcoroutines-ts>)
+    $<$<CXX_COMPILER_ID:Clang>:-fcoroutines-ts>
+    $<$<CXX_COMPILER_ID:Clang>:-std=gnu++2a>)
 
 install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
@@ -36,9 +39,13 @@ install(
 install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external/networking-ts-impl/include/
     DESTINATION include/net)
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external/meta/include/
+    DESTINATION include/meta)
 install(TARGETS coronet EXPORT coronet-project)
 install(EXPORT coronet-project DESTINATION coronet-project)
 
+add_subdirectory(external)
 add_subdirectory(scratch)
 
 enable_testing()

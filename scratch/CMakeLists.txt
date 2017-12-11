@@ -12,4 +12,4 @@
 # Project home: https://github.com/ericniebler/coronet
 
 add_executable(scratch scratch.cpp)
-target_link_libraries(scratch coronet)
+target_link_libraries(scratch coronet CppCoroLib)
