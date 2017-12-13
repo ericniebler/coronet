@@ -9,7 +9,7 @@
         {
             "label": "cmake",
             "type": "shell",
-            "command": "/Users/eniebler/cmake-install/bin/cmake -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Debug ../coronet",
+            "command": "cmake -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Debug ../coronet",
             "group": "build",
             "presentation": {
                 "reveal": "always",

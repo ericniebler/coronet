@@ -23,6 +23,8 @@
 
 #include <meta/meta.hpp>
 
+#include <coronet/detail/noop_coroutine.hpp>
+
 #define CAT2(X, Y) X ## Y
 #define CAT(X, Y) CAT2(X, Y)
 
@@ -37,15 +39,17 @@
 
 namespace coronet {
 
+    struct CSame {
+        TEMPLATE (class T, class U)
+            REQUIRES (__is_same(T, U))
+        void requires_();
+    };
+
     template <class T, class U>
     inline constexpr bool Same = __is_same(T, U);
 
     template <class T, class... Us>
     inline constexpr bool Invocable = std::__invokable<T, Us...>::value;
-
-    TEMPLATE(class T, class U)
-        REQUIRES(Same<T, U>)
-    void has_type(U&&);
 
     template <class Concept, class... Ts>
     using try_requires_ = decltype(&Concept::template requires_<Ts...>);
@@ -53,6 +57,42 @@ namespace coronet {
     template <class Concept, class... Ts>
     inline constexpr bool is_satisfied_by =
         meta::is_trait<meta::defer<try_requires_, Concept, Ts...>>::value;
+
+    template <class Concept, class... Args>
+    struct _placeholder {
+        static_assert(Same<Concept, std::decay_t<Concept>>);
+        TEMPLATE (class T)
+            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+        void operator()(T);
+    };
+
+    template <class Concept, class... Args>
+    struct _placeholder<Concept&&, Args...> {
+        TEMPLATE (class T)
+            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+        void operator()(T&&);
+    };
+
+    template <class Concept, class... Args>
+    struct _placeholder<Concept&, Args...> {
+        TEMPLATE (class T)
+            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+        void operator()(T&);
+    };
+
+    template <class Concept, class... Args>
+    struct _placeholder<Concept const&, Args...> {
+        TEMPLATE (class T)
+            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+        void operator()(T const&);
+    };
+
+    template <class Concept, class... Args>
+    inline constexpr _placeholder<Concept, Args...> satisfies {};
+
+    TEMPLATE (class T, class Concept, class... Args)
+        REQUIRES (Invocable<_placeholder<Concept, Args...>, T>)
+    void operator->*(T&&, _placeholder<Concept, Args...>);
 
     struct CExecutor {
         template <class E>
@@ -66,11 +106,84 @@ namespace coronet {
     struct CAllocator {
         template <class A>
         auto requires_(typename A::template rebind<int>::other& a) -> decltype(
-            has_type<int*>(a.allocate(static_cast<std::size_t>(0)))
+            (a.allocate(static_cast<std::size_t>(0))) ->* satisfies<CSame, int*>
         );
     };
     template <class A>
     inline constexpr bool Allocator = is_satisfied_by<CAllocator, A>;
+
+    struct CCompletionToken {
+        template <class T>
+        auto requires_(T t) -> decltype(
+            (t.get_executor()) ->* satisfies<CExecutor>,
+            (t.get_allocator()) ->* satisfies<CAllocator>
+        );
+    };
+    template <class T>
+    inline constexpr bool CompletionToken = is_satisfied_by<CCompletionToken, T>;
+
+    struct _ignore {
+        template <class T>
+        _ignore(T &&) {
+        }
+    };
+
+    struct _executor_archetype {
+        TEMPLATE (class F, class A)
+            REQUIRES (Invocable<F&> && Allocator<A>)
+        void post(F, A) const;
+    };
+
+    using _allocator_archetype = std::allocator<void>;
+
+    struct _completion_token_archetype {
+        _executor_archetype get_executor();
+        _allocator_archetype get_allocator();
+        TEMPLATE (class T)
+            REQUIRES (CompletionToken<T>)
+        operator T();
+    };
+
+    struct CHasExecutionContext {
+        template <class P>
+        auto requires_(P& p) -> decltype(
+            p.get_token() ->* satisfies<CCompletionToken>,
+            p.set_token(_completion_token_archetype{})
+        );
+    };
+    template <class P>
+    inline constexpr bool HasExecutionContext =
+        is_satisfied_by<CHasExecutionContext, P>;
+
+    struct _implicit_executor {
+        TEMPLATE (class Fn, class Alloc)
+            REQUIRES (Invocable<Fn&> && Allocator<Alloc>)
+        void post(Fn, Alloc) const {
+            std::terminate();
+        }
+    };
+
+    template <class A = std::allocator<void>>
+    struct _implicit_yield_t {
+    private:
+        A alloc_;
+    public:
+        constexpr _implicit_yield_t(A alloc = A{}) : alloc_(alloc) {
+        }
+        _implicit_executor get_executor() const {
+            return {};
+        }
+        A get_allocator() const {
+            return alloc_;
+        }
+        TEMPLATE(class A2)
+            REQUIRES(Allocator<A2>)
+        constexpr auto operator()(A2 a) const {
+            return _implicit_yield_t<A2>{a};
+        }
+    };
+
+    inline constexpr _implicit_yield_t<> _implicit {};
 
     template <class E, class A = std::allocator<void>>
     struct yield_t {
@@ -106,25 +219,16 @@ namespace coronet {
 
     inline constexpr yield_gen_t yield {};
 
-    struct with_implicit_context {};
-
     template <class Fn>
-    struct [[nodiscard]] callable_with_implicit_context
-        : with_implicit_context, Fn {
+    struct [[nodiscard]] callable_with_implicit_context : Fn {
         callable_with_implicit_context(Fn fun)
             : Fn(std::move(fun)) {
         }
     };
 
     template <class T>
-    inline constexpr bool has_implicit_context =
-        std::is_base_of_v<with_implicit_context, T>;
-
-    struct _ignore {
-        template <class T>
-        _ignore(T &&) {
-        }
-    };
+    inline constexpr bool WantsExecutionContext =
+        meta::is<T, callable_with_implicit_context>::value;
 
     template <class T>
     auto get_allocator(T t) -> decltype(t.get_allocator()) {
@@ -142,11 +246,19 @@ namespace coronet {
 
     template <class T, class Token>
     struct [[nodiscard]] task {
+        static_assert(CompletionToken<Token>);
         struct promise_type {
             std::exception_ptr eptr_ {};
             std::optional<T> value_ {};
             std::optional<Token> token_ {};
             std::experimental::coroutine_handle<> awaiter_ {};
+            std::function<void(std::experimental::coroutine_handle<>)> repost_;
+            // TEMPLATE (class... Ts)
+            //     REQUIRES (Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
+            // promise_type(Ts&&...) {}
+            Token const& get_token() const {
+                return *token_;
+            }
             void set_token(Token token) {
                 token_.emplace(std::move(token));
             }
@@ -163,19 +275,29 @@ namespace coronet {
             }
             auto final_suspend() const noexcept {
                 struct awaitable {
-                    promise_type const* promise_;
                     static bool await_ready() noexcept {
                         return false;
                     }
-                    std::experimental::coroutine_handle<> await_suspend(
-                        std::experimental::coroutine_handle<>) const {
-                        assert(promise_->awaiter_ != nullptr);
-                        return promise_->awaiter_;
+                    auto await_suspend(
+                        std::experimental::coroutine_handle<promise_type> awaiter) const {
+                        assert(awaiter.promise().awaiter_ != nullptr);
+                        if constexpr (meta::is<Token, _implicit_yield_t>::value) {
+                            return awaiter.promise().awaiter_;
+                        } else if (awaiter.promise().repost_) {
+                            // The awaiter has an execution context different
+                            // than the current one. Repost the work there so
+                            // the resume happens in the correct context.
+                            awaiter.promise().repost_(awaiter.promise().awaiter_);
+                            return noop_coroutine();
+                        }
+                        // No way to repost since the awaiter didn't have
+                        // an execution context.
+                        return awaiter.promise().awaiter_;
                     }
                     static void await_resume() noexcept {
                     }
                 };
-                return awaitable{this};
+                return awaitable{};
             }
             void unhandled_exception() noexcept {
                 eptr_ = std::current_exception();
@@ -188,8 +310,8 @@ namespace coronet {
             }
             template <class U>
             auto await_transform(U t) {
-                if constexpr (has_implicit_context<U>)
-                    return t(yield(get_executor(), get_allocator()));
+                if constexpr (WantsExecutionContext<U>)
+                    return t(_implicit(get_allocator()));
                 else
                     return t;
             }
@@ -207,27 +329,62 @@ namespace coronet {
             if (coro_)
                 coro_.destroy();
         }
+    private:
+        struct _awaitable {
+            std::experimental::coroutine_handle<promise_type> coro_;
+            bool await_ready() const {
+                return coro_.promise().value_.has_value();
+            }
+            template <class Promise>
+            std::experimental::coroutine_handle<> await_suspend(
+                std::experimental::coroutine_handle<Promise> awaiter) const {
+                coro_.promise().awaiter_ = awaiter;
+                // schedule this coroutine to execute via the executor (unless
+                // this coroutine and the calling coroutine have the same
+                // completion token, in which case, just return coro_).
+                auto const& token = coro_.promise().get_token();
+                if constexpr (meta::is<Token, _implicit_yield_t>::value) {
+                    // We're already in the correct execution context, just
+                    // execute the coroutine.
+                    return coro_;
+                }
+                // We're about to post this coroutine to another execution
+                // context. We must repost back to awaiter's execution context
+                // in final_suspend, otherwise the awaiter resumes in the
+                // wrong context.
+                else if constexpr (HasExecutionContext<Promise>) {
+                    auto const& calling_token = awaiter.promise().get_token();
+                    if constexpr (Same<decltype(token), decltype(calling_token)>) {
+                        using Alloc = std::decay_t<decltype(token.get_allocator())>;
+                        // Do the execution contexts compare equal?
+                        if (token.get_executor() == calling_token.get_executor() &&
+                            (typename std::allocator_traits<Alloc>::is_always_equal() ||
+                            token.get_allocator() == calling_token.get_allocator())) {
+                            // We're in the same execution context as our caller;
+                            // just execute the coroutine.
+                            return coro_;
+                        }
+                    }
+                    // This lambda gets called with awaiter in final_suspend
+                    coro_.promise().repost_ = [calling_token](
+                        std::experimental::coroutine_handle<> h) {
+                            coronet::get_executor(calling_token).post(
+                                h,
+                                coronet::get_allocator(calling_token));
+                        };
+                }
+                coronet::get_executor(token).post(coro_, coronet::get_allocator(token));
+                return noop_coroutine();
+            }
+            T await_resume() const {
+                if (coro_.promise().eptr_)
+                    std::rethrow_exception(coro_.promise().eptr_);
+                return *coro_.promise().value_;
+            }
+        };
+    public:
         auto operator co_await() const noexcept {
-            struct awaitable {
-                std::experimental::coroutine_handle<promise_type> coro_;
-                bool await_ready() const {
-                    return coro_.promise().value_.has_value();
-                }
-                void await_suspend(std::experimental::coroutine_handle<> awaiter) const {
-                    // schedule the continuation to be called from this coroutine's
-                    // final_suspend.
-                    coro_.promise().awaiter_ = awaiter;
-                    // schedule this coroutine to execute via the executor.
-                    auto& token = *coro_.promise().token_;
-                    coronet::get_executor(token).post(coro_, coronet::get_allocator(token));
-                }
-                T await_resume() const {
-                    if (coro_.promise().eptr_)
-                        std::rethrow_exception(coro_.promise().eptr_);
-                    return *coro_.promise().value_;
-                }
-            };
-            return awaitable{coro_};
+            return _awaitable{coro_};
         }
     };
 
@@ -243,6 +400,9 @@ namespace coronet {
             auto get_allocator() const {
                 return coronet::get_allocator(*token_);
             }
+            Token const& get_token() const {
+                return *token_;
+            }
             void set_token(Token token) {
                 token_.emplace(std::move(token));
                 auto coro = std::experimental::coroutine_handle<promise_type>::
@@ -256,17 +416,18 @@ namespace coronet {
                 return std::experimental::suspend_never{};
             }
             auto final_suspend() noexcept {
+                // BUGBUG if the final_suspend is never reached, this coroutine
+                // leaks.
                 struct awaitable {
-                    promise_type* this_;
                     static constexpr bool await_ready() noexcept {
                         return false;
                     }
-                    void await_suspend(std::experimental::coroutine_handle<>) {
-                        auto token = std::move(this_->token_);
-                        auto value = std::move(this_->value_);
-                        auto eptr = this_->eptr_;
-                        std::experimental::coroutine_handle<promise_type>
-                            ::from_promise(*this_).destroy();
+                    void await_suspend(
+                        std::experimental::coroutine_handle<promise_type> awaiter) {
+                        auto token = std::move(awaiter.promise().token_);
+                        auto value = std::move(awaiter.promise().value_);
+                        auto eptr = awaiter.promise().eptr_;
+                        awaiter.destroy();
                         if constexpr (!std::is_void_v<T>)
                             (*token)(eptr, value);
                         else
@@ -275,7 +436,7 @@ namespace coronet {
                     static void await_resume() noexcept {
                     }
                 };
-                return awaitable{this};
+                return awaitable{};
             }
             void unhandled_exception() noexcept {
                 eptr_ = std::current_exception();
@@ -288,16 +449,16 @@ namespace coronet {
             }
             template <class U>
             auto await_transform(U t) {
-                if constexpr (has_implicit_context<U>)
-                    return t(yield(get_executor(), get_allocator()));
+                if constexpr (WantsExecutionContext<U>)
+                    return t(_implicit(get_allocator()));
                 else
                     return t;
             }
         };
     };
 
-    // This becomes the de facto initial_suspend until the promise type constructor
-    // gets passed the completion token.
+    // This becomes the de facto initial_suspend until the promise type
+    // constructor gets passed the completion token.
     template <class Token>
     struct _try_set_token_ {
         Token token_;
@@ -307,8 +468,10 @@ namespace coronet {
         bool await_ready() const noexcept {
             return false;
         }
-        template <class Promise>
-        void await_suspend(std::experimental::coroutine_handle<Promise> awaiter) {
+        TEMPLATE (class Promise)
+            REQUIRES (HasExecutionContext<Promise>)
+        void await_suspend(
+            std::experimental::coroutine_handle<Promise> awaiter) {
             awaiter.promise().set_token(std::move(token_));
         }
         void await_resume() const noexcept {
@@ -319,11 +482,6 @@ namespace coronet {
     // promise type's constructor.
     #define INITIAL_SUSPEND(token) \
         (void)(co_await ::coronet::_try_set_token_{token})
-
-    struct _executor_type {
-        void post(_ignore, _ignore) const;
-    };
-    using _yield_type = coronet::yield_t<_executor_type>;
 
     // An asynchronous API wrapper that also provides an overload that does
     // not take a completion token, the semantics being to execute as a
@@ -343,7 +501,7 @@ namespace coronet {
         auto operator()(Ts... ts) const {
             using Ret = decltype(fn_(std::move(ts)...));
             // If this async operation returns coronet::void_, just return void.
-            if constexpr (meta::is<Ret, coronet::void_>::value) {
+            if constexpr (meta::is<Ret, void_>::value) {
                 (void) fn_(std::move(ts)...);
             } else {
                 return fn_(std::move(ts)...);
@@ -351,7 +509,7 @@ namespace coronet {
         }
 
         TEMPLATE(class... Ts)
-            REQUIRES(Invocable<const Fn&, const Ts&..., _yield_type&>)
+            REQUIRES(Invocable<const Fn&, const Ts&..., _implicit_yield_t<>>)
         auto operator()(Ts... ts) const {
             return callable_with_implicit_context{
                 [ts..., this](auto token) {
@@ -361,19 +519,43 @@ namespace coronet {
         }
     };
 
-    TEMPLATE (class Ex, class Fn)
-        REQUIRES(Executor<Ex>)
-    auto schedule_on(Ex ex, Fn fn) {
-        struct token : Fn {
-            Ex ex_;
-            token() = default;
-            token(Ex ex, Fn fn) : Fn(std::move(fn)), ex_(std::move(ex)) {}
-            auto get_executor() const {
-                return ex_;
-            }
-        };
-        return token{std::move(ex), std::move(fn)};
-    }
+    template <class Token, class Fn>
+    struct _callback_token : Token, Fn {
+        _callback_token(Token token, Fn fn)
+            : Token(token), Fn(fn) {
+        }
+    };
+
+    template <class E, class A = std::allocator<void>>
+    struct in {
+        static_assert(Executor<E>);
+        static_assert(Allocator<A>);
+        E exec_ {};
+        A alloc_ {};
+
+        in() = delete;
+        TEMPLATE ()
+            REQUIRES (Executor<E> && Allocator<A>)
+        constexpr explicit in(E e, A a = A{})
+            : exec_(e), alloc_(a) {
+        }
+        TEMPLATE ()
+            REQUIRES (Executor<E> && Allocator<A>)
+        constexpr in(A a, E e)
+            : exec_(e), alloc_(a) {
+        }
+        auto get_allocator() const {
+            return alloc_;
+        }
+        auto get_executor() const {
+            return exec_;
+        }
+
+        template <class Fn>
+        friend auto operator|(Fn fn, in ctx) {
+            return _callback_token{ctx, fn};
+        }
+    };
 
     // The mechanism from the Networking TS to support the Universal Model for
     // Asynchronous Operations (N3747).
@@ -384,14 +566,31 @@ namespace coronet {
     template <class Sig, class Token>
     using async_result_t = typename async_result<Sig, Token>::type;
 
-    template <class Ret, class... Args, class Token>
-    struct async_result<Ret(Args...), Token> {
-        using type = void_<Ret, Token>; // assume Token represents a callback
+    template <class Ret, class... Args, class Token, class Fn>
+    struct async_result<Ret(Args...), _callback_token<Token, Fn>> {
+        static_assert(
+            (std::is_void_v<Ret> && Invocable<Fn&, std::exception_ptr>) ||
+            Invocable<Fn&, std::exception_ptr, Ret>);
+        using type = void_<Ret, _callback_token<Token, Fn>>;
     };
 
     template <class Ret, class... Args, class Executor, class Allocator>
     struct async_result<Ret(Args...), yield_t<Executor, Allocator>> {
         using type = task<Ret, yield_t<Executor, Allocator>>;
+    };
+
+    template <class Ret, class... Args, class Executor, class Allocator>
+    struct async_result<Ret(Args...), in<Executor, Allocator>> {
+        static_assert(
+            meta::invoke<meta::id<std::false_type>, Args...>::value,
+            "You must specify a continuation when using "
+            "coronet::in(Executor [, Allocator]).");
+        using type = void;
+    };
+
+    template <class Ret, class... Args, class Allocator>
+    struct async_result<Ret(Args...), _implicit_yield_t<Allocator>> {
+        using type = task<Ret, _implicit_yield_t<Allocator>>;
     };
 } // namespace coronet
 
