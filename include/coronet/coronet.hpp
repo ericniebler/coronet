@@ -15,7 +15,6 @@
 #define CORONET_CORONET_HPP
 
 #include <cassert>
-#include <experimental/coroutine>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -23,94 +22,66 @@
 
 #include <meta/meta.hpp>
 
+#include <experimental/coroutine>
+#include <experimental/io_context> // for async_result
+
+#include <coronet/detail/concepts.hpp>
 #include <coronet/detail/noop_coroutine.hpp>
-
-#define CAT2(X, Y) X ## Y
-#define CAT(X, Y) CAT2(X, Y)
-
-#define TEMPLATE(...)                                                           \
-    template <__VA_ARGS__ __VA_OPT__(,)                                         \
-    /**/
-
-#define REQUIRES(...)                                                           \
-    int CAT(requires_, __LINE__) = 0,                                           \
-    std::enable_if_t<CAT(requires_, __LINE__) == 0 && (__VA_ARGS__), int> = 0>  \
-    /**/
 
 namespace coronet {
 
-    struct CSame {
-        TEMPLATE (class T, class U)
-            REQUIRES (__is_same(T, U))
-        void requires_();
+    struct _ignore {
+        template <class T>
+        _ignore(T &&) {
+        }
     };
 
-    template <class T, class U>
-    inline constexpr bool Same = __is_same(T, U);
-
-    template <class T, class... Us>
-    inline constexpr bool Invocable = std::__invokable<T, Us...>::value;
-
-    template <class Concept, class... Ts>
-    using try_requires_ = decltype(&Concept::template requires_<Ts...>);
-
-    template <class Concept, class... Ts>
-    inline constexpr bool is_satisfied_by =
-        meta::is_trait<meta::defer<try_requires_, Concept, Ts...>>::value;
-
-    template <class Concept, class... Args>
-    struct _placeholder {
-        static_assert(Same<Concept, std::decay_t<Concept>>);
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
-        void operator()(T);
+    template <class>
+    struct _back_fn;
+    template <std::size_t... Is>
+    struct _back_fn<std::index_sequence<Is...>> {
+        template <std::size_t>
+        using _ignore = _ignore;
+        template <class T>
+        T operator()(_ignore<Is>..., T&& t) {
+            return std::forward<T>(t);
+        }
     };
 
-    template <class Concept, class... Args>
-    struct _placeholder<Concept&&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
-        void operator()(T&&);
-    };
-
-    template <class Concept, class... Args>
-    struct _placeholder<Concept&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
-        void operator()(T&);
-    };
-
-    template <class Concept, class... Args>
-    struct _placeholder<Concept const&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
-        void operator()(T const&);
-    };
-
-    template <class Concept, class... Args>
-    inline constexpr _placeholder<Concept, Args...> satisfies {};
-
-    TEMPLATE (class T, class Concept, class... Args)
-        REQUIRES (Invocable<_placeholder<Concept, Args...>, T>)
-    void operator->*(T&&, _placeholder<Concept, Args...>);
-
-    struct CExecutor {
-        template <class E>
-        auto requires_(E& e, void (&fun)(), std::allocator<void> a) -> decltype(
-            e.post(fun, a)
-        );
-    };
-    template <class E>
-    inline constexpr bool Executor = is_satisfied_by<CExecutor, E>;
+    template <class... Args>
+    decltype(auto) _back(Args&&... args) {
+        using Is = std::make_index_sequence<sizeof...(Args) - 1>;
+        return _back_fn<Is>{}(std::forward<Args>(args)...);
+    }
 
     struct CAllocator {
-        template <class A>
-        auto requires_(typename A::template rebind<int>::other& a) -> decltype(
-            (a.allocate(static_cast<std::size_t>(0))) ->* satisfies<CSame, int*>
+        template <class A, class T>
+        using _rebind_alloc =
+            typename std::allocator_traits<A>::template rebind_alloc<T>;
+
+        template <class A, class T = typename _rebind_alloc<A, int>::value_type>
+        auto requires_(_rebind_alloc<A, int>& a) -> decltype(
+            (a.allocate(static_cast<std::size_t>(0))) ->* satisfies<CSame, T*>
         );
     };
     template <class A>
     inline constexpr bool Allocator = is_satisfied_by<CAllocator, A>;
+
+    template <class T>
+    struct _allocator_archetype {
+        using value_type = T;
+        T* allocate(std::size_t);
+    };
+
+    struct CExecutor {
+        template <class E, class A = _allocator_archetype<void>>
+        auto requires_(E& e, void (&fun)(), A a) -> decltype(
+            a ->* satisfies<CAllocator>,
+            e.post(fun, a)
+        );
+    };
+    template <class E, class A = _allocator_archetype<void>>
+    inline constexpr bool Executor = is_satisfied_by<CExecutor, E, A>;
 
     struct CCompletionToken {
         template <class T>
@@ -122,23 +93,15 @@ namespace coronet {
     template <class T>
     inline constexpr bool CompletionToken = is_satisfied_by<CCompletionToken, T>;
 
-    struct _ignore {
-        template <class T>
-        _ignore(T &&) {
-        }
-    };
-
     struct _executor_archetype {
         TEMPLATE (class F, class A)
             REQUIRES (Invocable<F&> && Allocator<A>)
         void post(F, A) const;
     };
 
-    using _allocator_archetype = std::allocator<void>;
-
     struct _completion_token_archetype {
         _executor_archetype get_executor();
-        _allocator_archetype get_allocator();
+        _allocator_archetype<void> get_allocator();
         TEMPLATE (class T)
             REQUIRES (CompletionToken<T>)
         operator T();
@@ -158,7 +121,7 @@ namespace coronet {
     struct _implicit_executor {
         TEMPLATE (class Fn, class Alloc)
             REQUIRES (Invocable<Fn&> && Allocator<Alloc>)
-        void post(Fn, Alloc) const {
+        [[noreturn]] void post(Fn, Alloc) const {
             std::terminate();
         }
     };
@@ -230,32 +193,40 @@ namespace coronet {
     inline constexpr bool WantsExecutionContext =
         meta::is<T, callable_with_implicit_context>::value;
 
-    template <class T>
+    TEMPLATE (class T)
+        REQUIRES (CompletionToken<T>)
     auto get_allocator(T t) -> decltype(t.get_allocator()) {
         return t.get_allocator();
     }
 
-    inline auto get_allocator(_ignore) {
-        return std::allocator<void>{};
-    }
-
-    template <class T>
+    TEMPLATE (class T)
+        REQUIRES (CompletionToken<T>)
     auto get_executor(T t) -> decltype(t.get_executor()) {
         return t.get_executor();
     }
 
     template <class T, class Token>
     struct [[nodiscard]] task {
+    private:
+        template <class, class...>
+        friend struct std::experimental::coroutine_traits;
+        template <class, class>
+        friend struct std::experimental::net::async_result;
         static_assert(CompletionToken<Token>);
+
         struct promise_type {
             std::exception_ptr eptr_ {};
             std::optional<T> value_ {};
             std::optional<Token> token_ {};
             std::experimental::coroutine_handle<> awaiter_ {};
             std::function<void(std::experimental::coroutine_handle<>)> repost_;
-            // TEMPLATE (class... Ts)
-            //     REQUIRES (Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
-            // promise_type(Ts&&...) {}
+            promise_type() = default;
+            TEMPLATE (class... Ts)
+                REQUIRES (Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
+            promise_type(Ts&&... args)
+                : promise_type() {
+                token_.emplace(_back(std::forward<Ts>(args)...));
+            }
             Token const& get_token() const {
                 return *token_;
             }
@@ -317,19 +288,6 @@ namespace coronet {
             }
         };
 
-        std::experimental::coroutine_handle<promise_type> coro_ {};
-
-        task(promise_type& p)
-          : coro_(std::experimental::coroutine_handle<promise_type>::from_promise(p))
-        {}
-        task(task&& that)
-          : coro_(std::exchange(that.coro_, {}))
-        {}
-        ~task() {
-            if (coro_)
-                coro_.destroy();
-        }
-    private:
         struct _awaitable {
             std::experimental::coroutine_handle<promise_type> coro_;
             bool await_ready() const {
@@ -382,7 +340,21 @@ namespace coronet {
                 return *coro_.promise().value_;
             }
         };
+
+        std::experimental::coroutine_handle<promise_type> coro_ {};
+
+        task(promise_type& p)
+          : coro_(std::experimental::coroutine_handle<promise_type>::from_promise(p))
+        {}
+
     public:
+        task(task&& that)
+          : coro_(std::exchange(that.coro_, {}))
+        {}
+        ~task() {
+            if (coro_)
+                coro_.destroy();
+        }
         auto operator co_await() const noexcept {
             return _awaitable{coro_};
         }
@@ -390,10 +362,24 @@ namespace coronet {
 
     template <class T, class Token>
     struct void_ {
+    private:
+        template <class, class...>
+        friend struct std::experimental::coroutine_traits;
+        template <class, class>
+        friend struct std::experimental::net::async_result;
+        static_assert(CompletionToken<Token>);
+
         struct promise_type {
             std::exception_ptr eptr_ {};
             T value_ {};
             std::optional<Token> token_ {};
+            promise_type() = default;
+            TEMPLATE (class... Ts)
+                REQUIRES (Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
+            promise_type(Ts&&... args)
+                : promise_type() {
+                token_.emplace(_back(std::forward<Ts>(args)...));
+            }
             auto get_executor() const {
                 return coronet::get_executor(*token_);
             }
@@ -480,7 +466,7 @@ namespace coronet {
 
     // This won't be needed once we can pass the coroutine arguments to the
     // promise type's constructor.
-    #define INITIAL_SUSPEND(token) \
+    #define INITIAL_SUSPEND(token)                                              \
         (void)(co_await ::coronet::_try_set_token_{token})
 
     // An asynchronous API wrapper that also provides an overload that does
@@ -557,41 +543,125 @@ namespace coronet {
         }
     };
 
-    // The mechanism from the Networking TS to support the Universal Model for
-    // Asynchronous Operations (N3747).
-    template <class Sig, class Token>
-    struct async_result {
+    template <class Token, class Sig>
+    struct _result_;
+    template <class Token, class Ret, class... Args>
+    struct _result_<Token, Ret(Args...)> {
+        using type = typename std::experimental::net::async_result<
+            Token,
+            meta::if_<
+                std::is_void<Ret>,
+                void(std::exception_ptr),
+                void(std::exception_ptr, Ret)>>::return_type;
     };
 
-    template <class Sig, class Token>
-    using async_result_t = typename async_result<Sig, Token>::type;
+    template <class Token, class Sig>
+    using result_t = meta::_t<_result_<Token, Sig>>;
 
-    template <class Ret, class... Args, class Token, class Fn>
-    struct async_result<Ret(Args...), _callback_token<Token, Fn>> {
+} // namespace coronet
+
+namespace std::experimental::net {
+    // The completion token stores a callback
+    template <class Token, class Fn, class Ret, class... Args>
+    struct async_result<coronet::_callback_token<Token, Fn>, Ret(Args...)> {
+    private:
         static_assert(
-            (std::is_void_v<Ret> && Invocable<Fn&, std::exception_ptr>) ||
-            Invocable<Fn&, std::exception_ptr, Ret>);
-        using type = void_<Ret, _callback_token<Token, Fn>>;
+            std::is_void_v<Ret>);
+        static_assert(
+            sizeof...(Args) < 3u && sizeof...(Args) != 0);
+        static_assert(
+            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
+        static_assert(
+            (1 == sizeof...(Args) && coronet::Invocable<Fn&, std::exception_ptr>) ||
+            coronet::Invocable<Fn&, std::exception_ptr, meta::back<meta::list<Args...>>>);
+        using _result_type =
+            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
+    public:
+        using return_type = coronet::void_<_result_type, coronet::_callback_token<Token, Fn>>;
+        using completion_handler_type = typename return_type::promise_type;
+
+        async_result(completion_handler_type& handler)
+            : void_{handler.get_return_object()} {
+        }
+        return_type get() {
+            return std::move(void_);
+        }
+    private:
+        return_type void_;
     };
 
-    template <class Ret, class... Args, class Executor, class Allocator>
-    struct async_result<Ret(Args...), yield_t<Executor, Allocator>> {
-        using type = task<Ret, yield_t<Executor, Allocator>>;
+    template <class Executor, class Allocator, class Ret, class... Args>
+    struct async_result<coronet::yield_t<Executor, Allocator>, Ret(Args...)> {
+    private:
+        static_assert(
+            std::is_void_v<Ret>);
+        static_assert(
+            sizeof...(Args) < 3u && sizeof...(Args) != 0);
+        static_assert(
+            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
+        using _result_type =
+            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
+    public:
+        using return_type = coronet::task<_result_type, coronet::yield_t<Executor, Allocator>>;
+        using completion_handler_type = typename return_type::promise_type;
+
+        async_result(completion_handler_type& handler)
+            : task_{handler.get_return_object()} {
+        }
+        return_type get() {
+            return std::move(task_);
+        }
+    private:
+        return_type task_;
     };
 
-    template <class Ret, class... Args, class Executor, class Allocator>
-    struct async_result<Ret(Args...), in<Executor, Allocator>> {
+    template <class Executor, class Allocator, class Ret, class... Args>
+    struct async_result<coronet::in<Executor, Allocator>, Ret(Args...)> {
         static_assert(
             meta::invoke<meta::id<std::false_type>, Args...>::value,
             "You must specify a continuation when using "
             "coronet::in(Executor [, Allocator]).");
-        using type = void;
+        using return_type = void;
+        using completion_handler_type = coronet::in<Executor, Allocator>;
+        async_result(completion_handler_type& handler);
+        return_type get();
     };
 
-    template <class Ret, class... Args, class Allocator>
-    struct async_result<Ret(Args...), _implicit_yield_t<Allocator>> {
-        using type = task<Ret, _implicit_yield_t<Allocator>>;
+    template <class Allocator, class Ret, class... Args>
+    struct async_result<coronet::_implicit_yield_t<Allocator>, Ret(Args...)> {
+    private:
+        static_assert(
+            std::is_void_v<Ret>);
+        static_assert(
+            sizeof...(Args) < 3u && sizeof...(Args) != 0);
+        static_assert(
+            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
+        using _result_type =
+            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
+    public:
+        using return_type = coronet::task<_result_type, coronet::_implicit_yield_t<Allocator>>;
+        using completion_handler_type = typename return_type::promise_type;
+
+        async_result(completion_handler_type& handler)
+            : task_{handler.get_return_object()} {
+        }
+        return_type get() {
+            return std::move(task_);
+        }
+    private:
+        return_type task_;
     };
-} // namespace coronet
+} //namespace std::experimental::net
+
+namespace std::experimental {
+    template <class T, class Token, class... Args>
+    struct coroutine_traits<coronet::task<T, Token>, Args...> {
+        using promise_type = typename coronet::task<T, Token>::promise_type;
+    };
+    template <class T, class Token, class... Args>
+    struct coroutine_traits<coronet::void_<T, Token>, Args...> {
+        using promise_type = typename coronet::void_<T, Token>::promise_type;
+    };
+} // namespace std::experimental
 
 #endif

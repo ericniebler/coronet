@@ -38,14 +38,14 @@ struct tagged_executor {
 
 // Define some "universal" asynchronous APIs:
 inline constexpr coronet::async async_stuff1 =
-    [](int arg, auto token) -> coronet::async_result_t<int(int), decltype(token)> {
+    [](int arg, auto token) -> coronet::result_t<decltype(token), int(int)> {
         INITIAL_SUSPEND(token);
         std::printf("async_stuff1\n");
         co_return arg + 1;
     };
 
 inline constexpr coronet::async async_stuff2 =
-    [](int arg, auto token) -> coronet::async_result_t<int(int), decltype(token)> {
+    [](int arg, auto token) -> coronet::result_t<decltype(token), int(int)> {
         INITIAL_SUSPEND(token);
         std::printf("async_stuff2\n");
         // allocator and executor of this coroutine are implicit.

@@ -27,6 +27,18 @@
         "algorithm": "cpp",
         "bitset": "cpp",
         "future": "cpp",
-        "random": "cpp"
+        "random": "cpp",
+        "__bit_reference": "cpp",
+        "__functional_base": "cpp",
+        "atomic": "cpp",
+        "chrono": "cpp",
+        "__memory": "cpp",
+        "filesystem": "cpp",
+        "iterator": "cpp",
+        "limits": "cpp",
+        "locale": "cpp",
+        "ratio": "cpp",
+        "system_error": "cpp",
+        "tuple": "cpp"
     }
 }
