@@ -195,23 +195,26 @@ namespace coronet {
 
     TEMPLATE (class T)
         REQUIRES (CompletionToken<T>)
-    auto get_allocator(T t) -> decltype(t.get_allocator()) {
+    auto get_allocator(T t) {
         return t.get_allocator();
     }
 
     TEMPLATE (class T)
         REQUIRES (CompletionToken<T>)
-    auto get_executor(T t) -> decltype(t.get_executor()) {
+    auto get_executor(T t) {
         return t.get_executor();
     }
+
+    template <class Token, class Ret, class Args, class Return>
+    struct _async_result_impl_;
 
     template <class T, class Token>
     struct [[nodiscard]] task {
     private:
         template <class, class...>
         friend struct std::experimental::coroutine_traits;
-        template <class, class>
-        friend struct std::experimental::net::async_result;
+        template <class, class, class, class>
+        friend struct _async_result_impl_;
         static_assert(CompletionToken<Token>);
 
         struct promise_type {
@@ -365,8 +368,8 @@ namespace coronet {
     private:
         template <class, class...>
         friend struct std::experimental::coroutine_traits;
-        template <class, class>
-        friend struct std::experimental::net::async_result;
+        template <class, class, class, class>
+        friend struct _async_result_impl_;
         static_assert(CompletionToken<Token>);
 
         struct promise_type {
@@ -513,21 +516,20 @@ namespace coronet {
     };
 
     template <class E, class A = std::allocator<void>>
-    struct in {
+    struct via {
         static_assert(Executor<E>);
         static_assert(Allocator<A>);
-        E exec_ {};
-        A alloc_ {};
+        E exec_;
+        A alloc_;
 
-        in() = delete;
         TEMPLATE ()
             REQUIRES (Executor<E> && Allocator<A>)
-        constexpr explicit in(E e, A a = A{})
+        constexpr explicit via(E e, A a = A{})
             : exec_(e), alloc_(a) {
         }
         TEMPLATE ()
             REQUIRES (Executor<E> && Allocator<A>)
-        constexpr in(A a, E e)
+        constexpr via(A a, E e)
             : exec_(e), alloc_(a) {
         }
         auto get_allocator() const {
@@ -538,13 +540,14 @@ namespace coronet {
         }
 
         template <class Fn>
-        friend auto operator|(Fn fn, in ctx) {
+        friend auto operator|(Fn fn, via ctx) {
             return _callback_token{ctx, fn};
         }
     };
 
     template <class Token, class Sig>
     struct _result_;
+
     template <class Token, class Ret, class... Args>
     struct _result_<Token, Ret(Args...)> {
         using type = typename std::experimental::net::async_result<
@@ -558,98 +561,77 @@ namespace coronet {
     template <class Token, class Sig>
     using result_t = meta::_t<_result_<Token, Sig>>;
 
+    // The completion token stores a callback
+    template <class Token, class Ret, class Args, class Return>
+    struct _async_result_impl_ {
+    private:
+        static_assert(
+            std::is_void_v<Ret>);
+        static_assert(
+            meta::size<Args>::value < 3u && meta::size<Args>::value != 0);
+        static_assert(
+            Same<std::exception_ptr, std::decay_t<meta::front<Args>>>);
+        using _result_type =
+            meta::if_c<1 == meta::size<Args>::value, void, meta::back<Args>>;
+    public:
+        using return_type = meta::invoke<Return, _result_type, Token>;
+        using completion_handler_type = typename return_type::promise_type;
+
+        _async_result_impl_(completion_handler_type& handler)
+            : ret_{handler.get_return_object()} {
+        }
+        return_type get() {
+            return std::move(ret_);
+        }
+    private:
+        return_type ret_;
+    };
 } // namespace coronet
 
 namespace std::experimental::net {
-    // The completion token stores a callback
     template <class Token, class Fn, class Ret, class... Args>
-    struct async_result<coronet::_callback_token<Token, Fn>, Ret(Args...)> {
-    private:
-        static_assert(
-            std::is_void_v<Ret>);
-        static_assert(
-            sizeof...(Args) < 3u && sizeof...(Args) != 0);
-        static_assert(
-            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
+    struct async_result<coronet::_callback_token<Token, Fn>, Ret(Args...)>
+        : coronet::_async_result_impl_<
+            coronet::_callback_token<Token, Fn>,
+            Ret,
+            meta::list<Args...>,
+            meta::quote<coronet::void_>> {
         static_assert(
             (1 == sizeof...(Args) && coronet::Invocable<Fn&, std::exception_ptr>) ||
             coronet::Invocable<Fn&, std::exception_ptr, meta::back<meta::list<Args...>>>);
-        using _result_type =
-            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
-    public:
-        using return_type = coronet::void_<_result_type, coronet::_callback_token<Token, Fn>>;
-        using completion_handler_type = typename return_type::promise_type;
-
-        async_result(completion_handler_type& handler)
-            : void_{handler.get_return_object()} {
-        }
-        return_type get() {
-            return std::move(void_);
-        }
-    private:
-        return_type void_;
+        using async_result::_async_result_impl_::_async_result_impl_;
     };
 
     template <class Executor, class Allocator, class Ret, class... Args>
-    struct async_result<coronet::yield_t<Executor, Allocator>, Ret(Args...)> {
-    private:
-        static_assert(
-            std::is_void_v<Ret>);
-        static_assert(
-            sizeof...(Args) < 3u && sizeof...(Args) != 0);
-        static_assert(
-            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
-        using _result_type =
-            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
-    public:
-        using return_type = coronet::task<_result_type, coronet::yield_t<Executor, Allocator>>;
-        using completion_handler_type = typename return_type::promise_type;
-
-        async_result(completion_handler_type& handler)
-            : task_{handler.get_return_object()} {
-        }
-        return_type get() {
-            return std::move(task_);
-        }
-    private:
-        return_type task_;
+    struct async_result<coronet::yield_t<Executor, Allocator>, Ret(Args...)>
+        : coronet::_async_result_impl_<
+            coronet::yield_t<Executor, Allocator>,
+            Ret,
+            meta::list<Args...>,
+            meta::quote<coronet::task>> {
+        using async_result::_async_result_impl_::_async_result_impl_;
     };
 
     template <class Executor, class Allocator, class Ret, class... Args>
-    struct async_result<coronet::in<Executor, Allocator>, Ret(Args...)> {
+    struct async_result<coronet::via<Executor, Allocator>, Ret(Args...)> {
         static_assert(
             meta::invoke<meta::id<std::false_type>, Args...>::value,
             "You must specify a continuation when using "
-            "coronet::in(Executor [, Allocator]).");
+            "coronet::via(Executor [, Allocator]).");
         using return_type = void;
-        using completion_handler_type = coronet::in<Executor, Allocator>;
+        using completion_handler_type = coronet::via<Executor, Allocator>;
         async_result(completion_handler_type& handler);
         return_type get();
     };
 
     template <class Allocator, class Ret, class... Args>
-    struct async_result<coronet::_implicit_yield_t<Allocator>, Ret(Args...)> {
-    private:
-        static_assert(
-            std::is_void_v<Ret>);
-        static_assert(
-            sizeof...(Args) < 3u && sizeof...(Args) != 0);
-        static_assert(
-            std::is_same_v<std::exception_ptr, std::decay_t<meta::front<meta::list<Args...>>>>);
-        using _result_type =
-            meta::if_c<1 == sizeof...(Args), void, meta::back<meta::list<Args...>>>;
-    public:
-        using return_type = coronet::task<_result_type, coronet::_implicit_yield_t<Allocator>>;
-        using completion_handler_type = typename return_type::promise_type;
-
-        async_result(completion_handler_type& handler)
-            : task_{handler.get_return_object()} {
-        }
-        return_type get() {
-            return std::move(task_);
-        }
-    private:
-        return_type task_;
+    struct async_result<coronet::_implicit_yield_t<Allocator>, Ret(Args...)>
+        : coronet::_async_result_impl_<
+            coronet::_implicit_yield_t<Allocator>,
+            Ret,
+            meta::list<Args...>,
+            meta::quote<coronet::task>> {
+        using async_result::_async_result_impl_::_async_result_impl_;
     };
 } //namespace std::experimental::net
 

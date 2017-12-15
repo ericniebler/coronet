@@ -50,11 +50,11 @@ namespace coronet {
     inline constexpr bool Invocable = std::__invokable<T, Us...>::value;
 
     template <class Concept, class... Ts>
-    using try_requires_ = decltype(&Concept::template requires_<Ts...>);
+    using _try_requires_ = decltype(&Concept::template requires_<Ts...>);
 
     template <class Concept, class... Ts>
     inline constexpr bool is_satisfied_by =
-        meta::is_trait<meta::defer<try_requires_, Concept, Ts...>>::value;
+        meta::is_trait<meta::defer<_try_requires_, Concept, Ts...>>::value;
 
     template <class Concept, class... Args>
     struct _placeholder {

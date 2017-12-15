@@ -21,21 +21,6 @@
 #include <optional>
 #include <functional>
 
-template <class Ex>
-struct tagged_executor {
-    Ex ex_;
-    std::string tag_;
-    tagged_executor(Ex ex, std::string tag)
-        : ex_(std::move(ex)), tag_(std::move(tag)) {
-    }
-    TEMPLATE(class Fn, class Al)
-        REQUIRES(coronet::Invocable<Fn&> && coronet::Allocator<Al>)
-    void post(Fn fn, Al al) {
-        std::printf("Scheduling through executor : %s\n", tag_.c_str());
-        ex_.post(fn, al);
-    }
-};
-
 // Define some "universal" asynchronous APIs:
 inline constexpr coronet::async async_stuff1 =
     [](int arg, auto token) -> coronet::result_t<decltype(token), int(int)> {
@@ -72,7 +57,7 @@ int main() {
         20,
         [state = 1234](std::exception_ptr, int i) {
             std::printf("hello callback! %d (state = %d)\n", i, state);
-        } | coronet::in(e)
+        } | coronet::via(e)
     );
 
     g.reset();
