@@ -40,8 +40,8 @@ namespace coronet
     template<class A>
     inline constexpr bool Allocator = is_satisfied_by<CAllocator, A>;
 
-    CO_PP_TEMPLATE(class A, class T)
-    CO_PP_REQUIRES(Allocator<A>&& std::is_object_v<T>)
+    CO_PP_template(class A, class T)(
+        requires Allocator<A> && std::is_object_v<T>)
     using rebind_alloc = CAllocator::_rebind_alloc<A, T>;
 
     template<class T>
@@ -149,13 +149,13 @@ namespace coronet
 
         using allocator_base::allocator_base;
         allocator() = default;
-        CO_PP_TEMPLATE(class U)
-        CO_PP_REQUIRES(!Same<T, U>)
+        CO_PP_template(class U)(
+            requires !Same<T, U>)
         allocator(allocator<U> other)
           : allocator_base(std::move(other))
         {}
-        CO_PP_TEMPLATE(class U)
-        CO_PP_REQUIRES(!Same<T, U>)
+        CO_PP_template(class U)(
+            requires !Same<T, U>)
         allocator& operator=(allocator<U> other)
         {
             static_cast<allocator_base&>(*this) = std::move(other);

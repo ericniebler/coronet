@@ -43,8 +43,8 @@ struct S
 {
     // virtual coronet::callable_task<int> async_member_helper
 
-    CO_PP_TEMPLATE(class Token)
-    CO_PP_REQUIRES(coronet::CompletionToken<Token>)
+    CO_PP_template(class Token)(
+        requires coronet::CompletionToken<Token>)
     auto async_member(int arg, Token token)
         -> coronet::result_t<Token, int(int)>
     {
@@ -58,11 +58,6 @@ struct S
     }
     int member = 42;
 };
-
-// cppcoro::task<int> async_thingie(coronet::allocator<>) {
-//     // TODO: get the allocator into the task's promise
-//     co_return 42;
-// }
 
 int
 main()

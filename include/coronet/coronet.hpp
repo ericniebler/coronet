@@ -54,8 +54,8 @@ namespace coronet
 
     struct _executor_archetype
     {
-        CO_PP_TEMPLATE(class F, class A)
-        CO_PP_REQUIRES(Invocable<F&>&& Allocator<A>)
+        CO_PP_template(class F, class A)(
+            requires Invocable<F&> && Allocator<A>)
         void post(F, A) const;
     };
 
@@ -63,8 +63,8 @@ namespace coronet
     {
         _executor_archetype get_executor();
         _allocator_archetype<void> get_allocator();
-        CO_PP_TEMPLATE(class T)
-        CO_PP_REQUIRES(CompletionToken<T>)
+        CO_PP_template(class T)(
+            requires CompletionToken<T>)
         operator T();
     };
 
@@ -81,8 +81,8 @@ namespace coronet
 
     struct _implicit_executor
     {
-        CO_PP_TEMPLATE(class Fn, class Alloc)
-        CO_PP_REQUIRES(Invocable<Fn&>&& Allocator<Alloc>)
+        CO_PP_template(class Fn, class Alloc)(
+            requires Invocable<Fn&> && Allocator<Alloc>)
         [[noreturn]] void post(Fn, Alloc) const
         {
             std::terminate();
@@ -107,8 +107,8 @@ namespace coronet
         {
             return alloc_;
         }
-        CO_PP_TEMPLATE(class A2)
-        CO_PP_REQUIRES(Allocator<A2>)
+        CO_PP_template(class A2)(
+            requires Allocator<A2>)
         constexpr auto operator()(A2 a) const
         {
             return _implicit_yield_t<A2>{a};
@@ -142,14 +142,14 @@ namespace coronet
 
     struct yield_gen_t
     {
-        CO_PP_TEMPLATE(class E, class A = std::allocator<void>)
-        CO_PP_REQUIRES(Executor<E>&& Allocator<A>)
+        CO_PP_template(class E, class A = std::allocator<void>)(
+            requires Executor<E> && Allocator<A>)
         constexpr auto operator()(E e, A a = A{}) const
         {
             return yield_t{e, a};
         }
-        CO_PP_TEMPLATE(class E, class A)
-        CO_PP_REQUIRES(Executor<E>&& Allocator<A>)
+        CO_PP_template(class E, class A)(
+            requires Executor<E> && Allocator<A>)
         constexpr auto operator()(A a, E e) const
         {
             return yield_t{e, a};
@@ -166,15 +166,15 @@ namespace coronet
     inline constexpr bool WantsExecutionContext =
         meta::is<T, callable_with_implicit_context>::value;
 
-    CO_PP_TEMPLATE(class T)
-    CO_PP_REQUIRES(CompletionToken<T>)
+    CO_PP_template(class T)(
+        requires CompletionToken<T>)
     auto get_allocator(T t)
     {
         return t.get_allocator();
     }
 
-    CO_PP_TEMPLATE(class T)
-    CO_PP_REQUIRES(CompletionToken<T>)
+    CO_PP_template(class T)(
+        requires CompletionToken<T>)
     auto get_executor(T t)
     {
         return t.get_executor();
@@ -200,9 +200,9 @@ namespace coronet
             std::experimental::coroutine_handle<> awaiter_{};
             std::function<void(std::experimental::coroutine_handle<>)> repost_;
             promise_type() = default;
-            CO_PP_TEMPLATE(class... Ts)
-            CO_PP_REQUIRES(
-                Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
+            CO_PP_template(class... Ts)(
+                requires Same<Token,
+                              std::decay_t<meta::back<meta::list<Ts...>>>>)
             promise_type(Ts&&... args)
               : promise_type()
             {
@@ -392,10 +392,10 @@ namespace coronet
             T value_{};
             std::optional<Token> token_{};
             promise_type() = default;
-            CO_PP_TEMPLATE(class... Ts)
-            CO_PP_REQUIRES(
-                Same<Token, std::decay_t<meta::back<meta::list<Ts...>>>>)
-            promise_type(Ts&&... args)
+            CO_PP_template(class... Ts)(
+                requires Same<Token,
+                              std::decay_t<meta::back<meta::list<Ts...>>>>)
+                promise_type(Ts&&... args)
               : promise_type()
             {
                 token_.emplace(_back(std::forward<Ts>(args)...));
@@ -490,9 +490,10 @@ namespace coronet
         {
             return false;
         }
-        CO_PP_TEMPLATE(class Promise)
-        CO_PP_REQUIRES(HasExecutionContext<Promise>)
-        void await_suspend(std::experimental::coroutine_handle<Promise> awaiter)
+        CO_PP_template(class Promise)(
+            requires HasExecutionContext<Promise>)
+            void await_suspend(
+                std::experimental::coroutine_handle<Promise> awaiter)
         {
             awaiter.promise().set_token(std::move(token_));
         }
@@ -519,8 +520,8 @@ namespace coronet
           : fn_(std::move(fun))
         {}
 
-        CO_PP_TEMPLATE(class... Ts)
-        CO_PP_REQUIRES(Invocable<const Fn&, Ts...>)
+        CO_PP_template(class... Ts)(
+            requires Invocable<const Fn&, Ts...>)
         auto operator()(Ts... ts) const
         {
             using Ret = decltype(fn_(std::move(ts)...));
@@ -535,8 +536,8 @@ namespace coronet
             }
         }
 
-        CO_PP_TEMPLATE(class... Ts)
-        CO_PP_REQUIRES(Invocable<const Fn&, const Ts&..., _implicit_yield_t<>>)
+        CO_PP_template(class... Ts)(
+            requires Invocable<const Fn&, const Ts&..., _implicit_yield_t<>>)
         auto operator()(Ts... ts) const
         {
             return callable_with_implicit_context{
@@ -563,14 +564,14 @@ namespace coronet
         E exec_;
         A alloc_;
 
-        CO_PP_TEMPLATE()
-        CO_PP_REQUIRES(Executor<E>&& Allocator<A>)
+        CO_PP_template()(
+            requires Executor<E> && Allocator<A>)
         constexpr explicit via(E e, A a = A{})
           : exec_(e)
           , alloc_(a)
         {}
-        CO_PP_TEMPLATE()
-        CO_PP_REQUIRES(Executor<E>&& Allocator<A>)
+        CO_PP_template()(
+            requires Executor<E> && Allocator<A>)
         constexpr via(A a, E e)
           : exec_(e)
           , alloc_(a)

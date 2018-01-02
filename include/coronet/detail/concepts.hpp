@@ -17,8 +17,6 @@
 #include <functional>
 #include <utility>
 
-#include <meta/meta.hpp>
-
 // standard concatenation macros.
 
 #define CO_PP_CAT(a, ...) CO_PP_PRIMITIVE_CAT(a, __VA_ARGS__)
@@ -30,7 +28,8 @@
 
 #if CO_PP_VA_OPT_SUPPORTED
 
-#define CO_PP_TEMPLATE(...) template<__VA_ARGS__ __VA_OPT__(, ) /**/
+#define CO_PP_template(...) \
+    template<__VA_ARGS__ __VA_OPT__(, ) CO_PP_REQUIRES /**/
 
 #else // CO_PP_VA_OPT_SUPPORTED
 
@@ -87,31 +86,39 @@
 #define CO_PP_COMMA() ,
 #define CO_PP_COMMA_IIF(X) CO_PP_IIF(X)(CO_PP_EMPTY, CO_PP_COMMA)()
 
-#define CO_PP_TEMPLATE(...)               \
+#define CO_PP_template(...)               \
     template<__VA_ARGS__ CO_PP_COMMA_IIF( \
-        CO_PP_IS_EMPTY_NON_FUNCTION(__VA_ARGS__)) /**/
-
+        CO_PP_IS_EMPTY_NON_FUNCTION(__VA_ARGS__)) CO_PP_REQUIRES /**/
 #endif // CO_PP_VA_OPT_SUPPORTED
 
-#define CO_PP_REQUIRES(...)                                                 \
-    int CO_PP_CAT(requires_,                                                \
-                  __LINE__) = 0,                                            \
-                  std::enable_if_t < CO_PP_CAT(requires_, __LINE__) == 0 && \
-                      (__VA_ARGS__) > * = nullptr > /**/
+#define CO_PP_REQUIRES(...) \
+    CO_PP_REQUIRES_2(CO_PP_CAT(CO_PP_IMPL_, __VA_ARGS__))
+#define CO_PP_IMPL_requires
+#define CO_PP_REQUIRES_2(...)                                                   \
+    int _coronet_requires_ = 0,                                                 \
+    std::enable_if_t<(_coronet_requires_ == 0 && (__VA_ARGS__))>* = nullptr >
 
 namespace coronet
 {
     template<class Concept, class... Ts>
-    using _try_requires_ = decltype(&Concept::template requires_<Ts...>);
-
+    constexpr bool _is_not_satisfied_by_(long)
+    {
+        return true;
+    }
+    template<class Concept, class... Ts>
+    constexpr decltype(&Concept::template requires_<Ts...>)
+    _is_not_satisfied_by_(int)
+    {
+        return nullptr;
+    }
     template<class Concept, class... Ts>
     inline constexpr bool is_satisfied_by =
-        meta::is_trait<meta::defer<_try_requires_, Concept, Ts...>>::value;
+        !_is_not_satisfied_by_<Concept, Ts...>(0);
 
     struct CSame
     {
-        CO_PP_TEMPLATE(class T, class U)
-        CO_PP_REQUIRES(__is_same(T, U))
+        CO_PP_template(class T, class U)(
+            requires __is_same(T, U))
         void requires_();
     };
 
@@ -120,8 +127,8 @@ namespace coronet
 
     struct CConvertibleTo
     {
-        CO_PP_TEMPLATE(class T, class U)
-        CO_PP_REQUIRES(std::is_convertible_v<T, U>)
+        CO_PP_template(class T, class U)(
+            requires std::is_convertible_v<T, U>)
         auto requires_(T (&t)()) -> decltype(static_cast<U>(t()));
     };
 
@@ -130,8 +137,8 @@ namespace coronet
 
     struct CInvocable
     {
-        CO_PP_TEMPLATE(class T, class... Us)
-        CO_PP_REQUIRES(std::__invokable<T, Us...>::value)
+        CO_PP_template(class T, class... Us)(
+            requires std::__invokable<T, Us...>::value)
         void requires_();
     };
 
@@ -143,7 +150,8 @@ namespace coronet
 
     // For nested requirements:
     template<class Concept, class... Args>
-    inline constexpr meta::if_c<is_satisfied_by<Concept, Args...>>* requires_{};
+    inline constexpr std::enable_if_t<is_satisfied_by<Concept, Args...>>*
+        requires_{};
 
     // For placeholder requirements, like:
     //      ( a.foo() ) ->* satisfies<CFoo>
@@ -151,32 +159,32 @@ namespace coronet
     struct _placeholder
     {
         static_assert(Same<Concept, std::decay_t<Concept>>);
-        CO_PP_TEMPLATE(class T)
-        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
+        CO_PP_template(class T)(
+            requires is_satisfied_by<Concept, T, Args...>)
         void operator()(T);
     };
 
     template<class Concept, class... Args>
     struct _placeholder<Concept&&, Args...>
     {
-        CO_PP_TEMPLATE(class T)
-        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
+        CO_PP_template(class T)(
+            requires is_satisfied_by<Concept, T, Args...>)
         void operator()(T&&);
     };
 
     template<class Concept, class... Args>
     struct _placeholder<Concept&, Args...>
     {
-        CO_PP_TEMPLATE(class T)
-        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
+        CO_PP_template(class T)(
+            requires is_satisfied_by<Concept, T, Args...>)
         void operator()(T&);
     };
 
     template<class Concept, class... Args>
     struct _placeholder<Concept const&, Args...>
     {
-        CO_PP_TEMPLATE(class T)
-        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
+        CO_PP_template(class T)(
+            requires is_satisfied_by<Concept, T, Args...>)
         void operator()(T const&);
     };
 
@@ -187,8 +195,8 @@ namespace coronet
 
     // For placeholder requirements, like:
     //      ( a.foo() ) ->* satisfies<CFoo>
-    CO_PP_TEMPLATE(class T, class Concept, class... Args)
-    CO_PP_REQUIRES(Invocable<_placeholder<Concept, Args...>, T>)
+    CO_PP_template(class T, class Concept, class... Args)(
+        requires Invocable<_placeholder<Concept, Args...>, T>)
     void operator->*(T&&, _placeholder<Concept, Args...>);
 
     // For typename requirements, like:
