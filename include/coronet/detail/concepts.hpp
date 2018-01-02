@@ -14,83 +14,188 @@
 #ifndef CORONET_DETAIL_CONCEPTS_HPP
 #define CORONET_DETAIL_CONCEPTS_HPP
 
-#include <utility>
 #include <functional>
+#include <utility>
+
 #include <meta/meta.hpp>
 
-#define CAT2(X, Y) X ## Y
-#define CAT(X, Y) CAT2(X, Y)
+// standard concatenation macros.
 
-#define TEMPLATE(...)                                                           \
-    template <__VA_ARGS__ __VA_OPT__(,)                                         \
+#define CO_PP_CAT(a, ...) CO_PP_PRIMITIVE_CAT(a, __VA_ARGS__)
+#define CO_PP_PRIMITIVE_CAT(a, ...) a##__VA_ARGS__
+
+#define CO_PP_THIRD_ARG(A, B, C, ...) C
+#define CO_PP_VA_OPT_SUPPORTED_I(...) CO_PP_THIRD_ARG(__VA_OPT__(, ), 1, 0)
+#define CO_PP_VA_OPT_SUPPORTED CO_PP_VA_OPT_SUPPORTED_I(?)
+
+#if CO_PP_VA_OPT_SUPPORTED
+
+#define CO_PP_TEMPLATE(...) template<__VA_ARGS__ __VA_OPT__(, ) /**/
+
+#else // CO_PP_VA_OPT_SUPPORTED
+
+// binary intermediate split macro.
+//
+// An "intermediate" is a single macro argument
+// that expands to more than one argument before
+// it can be passed to another macro.  E.g.
+//
+// #define IM x, y
+//
+// CO_PP_SPLIT(0, IM) // x
+// CO_PP_SPLIT(1, IM) // y
+
+#define CO_PP_SPLIT(i, ...) CO_PP_PRIMITIVE_CAT(CO_PP_SPLIT_, i)(__VA_ARGS__)
+#define CO_PP_SPLIT_0(a, ...) a
+#define CO_PP_SPLIT_1(a, ...) __VA_ARGS__
+
+// parenthetic expression detection on
+// parenthetic expressions of any arity
+// (hence the name 'variadic').  E.g.
+//
+// CO_PP_IS_VARIADIC(+)         // 0
+// CO_PP_IS_VARIADIC(())        // 1
+// CO_PP_IS_VARIADIC(text)      // 0
+// CO_PP_IS_VARIADIC((a, b, c)) // 1
+
+#define CO_PP_IS_VARIADIC(...)                                               \
+    CO_PP_SPLIT(                                                             \
+        0, CO_PP_CAT(CO_PP_IS_VARIADIC_R_, CO_PP_IS_VARIADIC_C __VA_ARGS__)) \
     /**/
+#define CO_PP_IS_VARIADIC_C(...) 1
+#define CO_PP_IS_VARIADIC_R_1 1,
+#define CO_PP_IS_VARIADIC_R_CO_PP_IS_VARIADIC_C 0,
 
-#define REQUIRES(...)                                                           \
-    int CAT(requires_, __LINE__) = 0,                                           \
-    std::enable_if_t<CAT(requires_, __LINE__) == 0 && (__VA_ARGS__), int> = 0>  \
-    /**/
+// lazy 'if' construct.
+// 'bit' must be 0 or 1 (i.e. Boolean).  E.g.
+//
+// CO_PP_IIF(0)(T, F) // F
+// CO_PP_IIF(1)(T, F) // T
 
-namespace coronet {
-    struct CSame {
-        TEMPLATE (class T, class U)
-            REQUIRES (__is_same(T, U))
-        void requires_();
-    };
+#define CO_PP_IIF(bit) CO_PP_PRIMITIVE_CAT(CO_PP_IIF_, bit)
+#define CO_PP_IIF_0(t, ...) __VA_ARGS__
+#define CO_PP_IIF_1(t, ...) t
 
-    template <class T, class U>
-    inline constexpr bool Same = __is_same(T, U);
+// emptiness detection macro...
 
-    struct CInvocable {
-        TEMPLATE (class T, class... Us)
-            REQUIRES (std::__invokable<T, Us...>::value)
-        void requires_();
-    };
+#define CO_PP_IS_EMPTY_NON_FUNCTION(...)      \
+    CO_PP_IIF(CO_PP_IS_VARIADIC(__VA_ARGS__)) \
+    (0, CO_PP_IS_VARIADIC(CO_PP_IS_EMPTY_NON_FUNCTION_C __VA_ARGS__())) /**/
+#define CO_PP_IS_EMPTY_NON_FUNCTION_C() ()
 
-    template <class T, class... Us>
-    inline constexpr bool Invocable = std::__invokable<T, Us...>::value;
+#define CO_PP_EMPTY()
+#define CO_PP_COMMA() ,
+#define CO_PP_COMMA_IIF(X) CO_PP_IIF(X)(CO_PP_EMPTY, CO_PP_COMMA)()
 
-    template <class Concept, class... Ts>
+#define CO_PP_TEMPLATE(...)               \
+    template<__VA_ARGS__ CO_PP_COMMA_IIF( \
+        CO_PP_IS_EMPTY_NON_FUNCTION(__VA_ARGS__)) /**/
+
+#endif // CO_PP_VA_OPT_SUPPORTED
+
+#define CO_PP_REQUIRES(...)                                                 \
+    int CO_PP_CAT(requires_,                                                \
+                  __LINE__) = 0,                                            \
+                  std::enable_if_t < CO_PP_CAT(requires_, __LINE__) == 0 && \
+                      (__VA_ARGS__) > * = nullptr > /**/
+
+namespace coronet
+{
+    template<class Concept, class... Ts>
     using _try_requires_ = decltype(&Concept::template requires_<Ts...>);
 
-    template <class Concept, class... Ts>
+    template<class Concept, class... Ts>
     inline constexpr bool is_satisfied_by =
         meta::is_trait<meta::defer<_try_requires_, Concept, Ts...>>::value;
 
-    template <class Concept, class... Args>
-    struct _placeholder {
+    struct CSame
+    {
+        CO_PP_TEMPLATE(class T, class U)
+        CO_PP_REQUIRES(__is_same(T, U))
+        void requires_();
+    };
+
+    template<class T, class U>
+    inline constexpr bool Same = __is_same(T, U);
+
+    struct CConvertibleTo
+    {
+        CO_PP_TEMPLATE(class T, class U)
+        CO_PP_REQUIRES(std::is_convertible_v<T, U>)
+        auto requires_(T (&t)()) -> decltype(static_cast<U>(t()));
+    };
+
+    template<class T, class U>
+    inline constexpr bool ConvertibleTo = is_satisfied_by<CConvertibleTo, T, U>;
+
+    struct CInvocable
+    {
+        CO_PP_TEMPLATE(class T, class... Us)
+        CO_PP_REQUIRES(std::__invokable<T, Us...>::value)
+        void requires_();
+    };
+
+    template<class T, class... Us>
+    inline constexpr bool Invocable = std::__invokable<T, Us...>::value;
+
+    template<class... Us>
+    using _invokable_archetype = void (&)(Us...);
+
+    // For nested requirements:
+    template<class Concept, class... Args>
+    inline constexpr meta::if_c<is_satisfied_by<Concept, Args...>>* requires_{};
+
+    // For placeholder requirements, like:
+    //      ( a.foo() ) ->* satisfies<CFoo>
+    template<class Concept, class... Args>
+    struct _placeholder
+    {
         static_assert(Same<Concept, std::decay_t<Concept>>);
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+        CO_PP_TEMPLATE(class T)
+        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
         void operator()(T);
     };
 
-    template <class Concept, class... Args>
-    struct _placeholder<Concept&&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+    template<class Concept, class... Args>
+    struct _placeholder<Concept&&, Args...>
+    {
+        CO_PP_TEMPLATE(class T)
+        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
         void operator()(T&&);
     };
 
-    template <class Concept, class... Args>
-    struct _placeholder<Concept&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+    template<class Concept, class... Args>
+    struct _placeholder<Concept&, Args...>
+    {
+        CO_PP_TEMPLATE(class T)
+        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
         void operator()(T&);
     };
 
-    template <class Concept, class... Args>
-    struct _placeholder<Concept const&, Args...> {
-        TEMPLATE (class T)
-            REQUIRES (is_satisfied_by<Concept, T, Args...>)
+    template<class Concept, class... Args>
+    struct _placeholder<Concept const&, Args...>
+    {
+        CO_PP_TEMPLATE(class T)
+        CO_PP_REQUIRES(is_satisfied_by<Concept, T, Args...>)
         void operator()(T const&);
     };
 
-    template <class Concept, class... Args>
-    inline constexpr _placeholder<Concept, Args...> satisfies {};
+    // For placeholder requirements, like:
+    //      ( a.foo() ) ->* satisfies<CFoo>
+    template<class Concept, class... Args>
+    inline constexpr _placeholder<Concept, Args...> satisfies{};
 
-    TEMPLATE (class T, class Concept, class... Args)
-        REQUIRES (Invocable<_placeholder<Concept, Args...>, T>)
+    // For placeholder requirements, like:
+    //      ( a.foo() ) ->* satisfies<CFoo>
+    CO_PP_TEMPLATE(class T, class Concept, class... Args)
+    CO_PP_REQUIRES(Invocable<_placeholder<Concept, Args...>, T>)
     void operator->*(T&&, _placeholder<Concept, Args...>);
+
+    // For typename requirements, like:
+    //      type<typename T::iterator_category>
+    template<class>
+    inline constexpr int type = 0;
+
 } // namespace coronet
 
 #endif

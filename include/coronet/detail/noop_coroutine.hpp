@@ -27,8 +27,14 @@ namespace coronet
             struct promise_type final
             {
                 _noop_coroutine_gen get_return_object() noexcept;
-                std::experimental::suspend_never initial_suspend() noexcept { return {}; }
-                std::experimental::suspend_never final_suspend() noexcept { return {}; }
+                std::experimental::suspend_never initial_suspend() noexcept
+                {
+                    return {};
+                }
+                std::experimental::suspend_never final_suspend() noexcept
+                {
+                    return {};
+                }
                 void unhandled_exception() noexcept {}
                 void return_void() noexcept {}
             };
@@ -41,12 +47,13 @@ namespace coronet
 
         private:
             explicit _noop_coroutine_gen(promise_type& p) noexcept
-                : coro_(std::experimental::coroutine_handle<promise_type>::from_promise(p))
+              : coro_(std::experimental::coroutine_handle<
+                      promise_type>::from_promise(p))
             {}
 
             static _noop_coroutine_gen coroutine()
             {
-                for (;;)
+                for(;;)
                 {
                     co_await std::experimental::suspend_always{};
                 }
@@ -55,13 +62,15 @@ namespace coronet
             const std::experimental::coroutine_handle<> coro_;
         };
 
-        inline _noop_coroutine_gen _noop_coroutine_gen::promise_type::get_return_object() noexcept
+        inline _noop_coroutine_gen _noop_coroutine_gen::promise_type::
+            get_return_object() noexcept
         {
             return _noop_coroutine_gen{*this};
         }
     } // namespace detail
 
-    inline std::experimental::coroutine_handle<> noop_coroutine() {
+    inline std::experimental::coroutine_handle<> noop_coroutine()
+    {
         return detail::_noop_coroutine_gen::value();
     }
 }
